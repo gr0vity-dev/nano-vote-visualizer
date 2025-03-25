@@ -38,6 +38,9 @@ export class AppComponent implements OnInit, OnDestroy {
 	readonly representativeStats = new Map<string, RepsetentativeStatItem>();
 	readonly electionChartRecentlyRemoved = new Set<string>();
 	readonly startTime = new Date().getTime() / 1000;
+	readonly maxTrackedElections = 65536; // 2^16 - Memory limit for tracked elections
+	readonly spatialIndex = new Map<string, ElectionChartData[]>();
+	readonly spatialCellSize = 5; // Size of each spatial cell in time units
 
 	// User defined settings
 	fps: number;
@@ -128,6 +131,14 @@ export class AppComponent implements OnInit, OnDestroy {
 				return;
 			}
 
+			// Get vote type (default to 'normal' if not specified)
+			const voteType = vote.message.type || 'normal';
+			
+			// Ignore votes with type 'late' as requested
+			if (voteType === 'late') {
+				return;
+			}
+
 			const principalWeightPercent = new BigNumber(principalWeight).div(new BigNumber(this.ws.quorumDelta)).times(100);
 			const blocks = this.repToBlocks.get(vote.message.account);
 
@@ -167,7 +178,7 @@ export class AppComponent implements OnInit, OnDestroy {
 							}
 						}
 					} else if (!this.electionChartRecentlyRemoved.has(block)) {
-						this.addNewBlock(block, principalWeightPercent.toNumber());
+						this.addNewBlock(block, principalWeightPercent.toNumber(), false, voteType);
 					}
 
 					this.representativeStats.get(vote.message.account).voteCount++;
@@ -185,8 +196,10 @@ export class AppComponent implements OnInit, OnDestroy {
 				} else {
 					item.quorum = 100;
 				}
+				// Mark as having a started election
+				item.electionStarted = true;
 			} else {
-				this.addNewBlock(block, 100);
+				this.addNewBlock(block, 100, true, 'normal');
 			}
 			this.confirmations++;
 
@@ -216,7 +229,15 @@ export class AppComponent implements OnInit, OnDestroy {
 		});
 	}
 
-	addNewBlock(block: string, quorum: number) {
+	updateSpatialIndex(item: ElectionChartData) {
+		const cellKey = Math.floor(item.added / this.spatialCellSize).toString();
+		if (!this.spatialIndex.has(cellKey)) {
+			this.spatialIndex.set(cellKey, []);
+		}
+		this.spatialIndex.get(cellKey).push(item);
+	}
+
+	addNewBlock(block: string, quorum: number, electionStarted: boolean = false, voteType: string = 'normal') {
 		const previousIndex = this.blockToIndex.get(block);
 		if (previousIndex) {
 			return;
@@ -226,20 +247,37 @@ export class AppComponent implements OnInit, OnDestroy {
 		const added = this.getRelativeTimeInSeconds();
 		this.blockToIndex.set(block, index);
 
+		let item: ElectionChartData;
 		if (this.smooth) {
-			this.data[index] = {
+			item = {
 				added: added,
 				quorum: 0,
+				electionStarted: electionStarted,
+				hash: block,
+				voteType: voteType
 			};
+			this.data[index] = item;
 			this.indexToAnimating.set(index, quorum);
 		} else {
-			this.data[index] = {
+			item = {
 				added: added,
 				quorum,
+				electionStarted: electionStarted,
+				hash: block,
+				voteType: voteType
 			};
+			this.data[index] = item;
 		}
+		
+		// Add to spatial index for efficient hover detection
+		this.updateSpatialIndex(item);
 
 		this.blocks++;
+
+		// Check memory limit
+		if (this.blocks > this.maxTrackedElections) {
+			this.enforceMemoryLimit();
+		}
 	}
 
 	async buildElectionChart() {
@@ -266,11 +304,13 @@ export class AppComponent implements OnInit, OnDestroy {
 				.data(this.data);
 
 		this.electionChart = document.querySelector('d3fc-canvas');
-		const series = (<any>fc)
+		
+		// Use different point sizes based on election status
+		const pointSeries = (<any>fc)
 				.seriesWebglPoint()
 				.xScale(xScale)
 				.yScale(yScale)
-				.size(10)
+				.size((d: ElectionChartData) => d.electionStarted ? 12 : 8) // Larger for started elections
 				.crossValue((item: ElectionChartData) => item?.added)
 				.mainValue((item: ElectionChartData) => item?.quorum)
 				.defined(() => true)
@@ -286,7 +326,7 @@ export class AppComponent implements OnInit, OnDestroy {
 					xScale.range([0, width]);
 					yScale.range([height, 0]);
 					gl = this.electionChart.querySelector('canvas').getContext('webgl');
-					series.context(gl);
+					pointSeries.context(gl);
 				})
 				.on('draw', () => {
 					if (pixels == null) {
@@ -336,6 +376,9 @@ export class AppComponent implements OnInit, OnDestroy {
 						this.data[nextIndex] = {
 							added: now,
 							quorum: null,
+							electionStarted: false,
+							hash: '',
+							voteType: '',
 						};
 					}
 
@@ -350,7 +393,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
 					// Set data to color function and chart
 					fillColor.data(displayedData);
-					series(displayedData);
+					pointSeries(displayedData);
 
 					// Set the displayed area to be from start time to current time
 					xScale.domain([ Math.max(start, 0), now ]);
@@ -364,6 +407,49 @@ export class AppComponent implements OnInit, OnDestroy {
 						gl.UNSIGNED_BYTE,
 						pixels
 					);
+				})
+				.on('mousemove', (event) => {
+					const [x, y] = d3.pointer(event);
+					const xValue = xScale.invert(x);
+					const yValue = yScale.invert(y);
+					
+					// Use spatial index to limit search
+					const cellKey = Math.floor(xValue / this.spatialCellSize).toString();
+					const nearbyItems = this.spatialIndex.get(cellKey) || [];
+					
+					// Find the closest point in the limited set
+					let closest = null;
+					let minDistance = Infinity;
+					
+					for (const item of nearbyItems) {
+						if (!item) continue;
+						
+						const dx = Math.abs(item.added - xValue);
+						const dy = Math.abs(item.quorum - yValue);
+						const distance = Math.sqrt(dx * dx + dy * dy);
+						
+						if (distance < minDistance && distance < 0.05) { // Threshold for "close enough"
+							minDistance = distance;
+							closest = item;
+						}
+					}
+					
+					// Show tooltip with hash if a point is found
+					const tooltip = document.getElementById('hash-tooltip');
+					if (closest && tooltip) {
+						tooltip.style.left = (x + 10) + 'px';
+						tooltip.style.top = (y + 10) + 'px';
+						tooltip.style.display = 'block';
+						tooltip.innerText = closest.hash;
+					} else if (tooltip) {
+						tooltip.style.display = 'none';
+					}
+				})
+				.on('mouseleave', () => {
+					const tooltip = document.getElementById('hash-tooltip');
+					if (tooltip) {
+						tooltip.style.display = 'none';
+					}
 				});
 	}
 
@@ -472,11 +558,63 @@ export class AppComponent implements OnInit, OnDestroy {
 		}, 1000 * 60 * this.maxTimeframeMinutes);
 	}
 
+	enforceMemoryLimit() {
+		if (this.data.length <= this.maxTrackedElections) {
+			return;
+		}
+		
+		// Calculate how many items to remove (20% of max to avoid doing this too often)
+		const removeCount = Math.floor(this.maxTrackedElections * 0.2);
+		
+		// Find oldest items
+		const indices = Object.keys(this.data)
+			.map(Number)
+			.filter(i => this.data[i] !== undefined)
+			.sort((a, b) => this.data[a].added - this.data[b].added)
+			.slice(0, removeCount);
+		
+		// Remove these items
+		for (const index of indices) {
+			// Find and remove from blockToIndex
+			for (const [hash, idx] of this.blockToIndex.entries()) {
+				if (idx === index) {
+					this.blockToIndex.delete(hash);
+					break;
+				}
+			}
+			
+			// Remove from spatial index
+			const item = this.data[index];
+			if (item) {
+				const cellKey = Math.floor(item.added / this.spatialCellSize).toString();
+				const cell = this.spatialIndex.get(cellKey);
+				if (cell) {
+					const itemIndex = cell.indexOf(item);
+					if (itemIndex >= 0) {
+						cell.splice(itemIndex, 1);
+					}
+					if (cell.length === 0) {
+						this.spatialIndex.delete(cellKey);
+					}
+				}
+			}
+			
+			// Remove from data and animation queue
+			delete this.data[index];
+			this.indexToAnimating.delete(index);
+		}
+		
+		console.log(`Memory limit reached: removed ${removeCount} oldest blocks`);
+	}
+
 }
 
 export interface ElectionChartData {
 	added: number;
 	quorum: number;
+	electionStarted: boolean;
+	hash: string;
+	voteType: string;
 }
 
 export interface RepsetentativeStatItem {
@@ -487,5 +625,6 @@ export interface RepsetentativeStatItem {
 
 export enum GraphStyle {
 	X0,
-	HEATMAP,
+	X1,
+	HEATMAP = 2,
 }
