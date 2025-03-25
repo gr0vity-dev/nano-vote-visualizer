@@ -1,0 +1,139 @@
+.selected-hashes
+	position: fixed
+	right: 20px
+	top: 50%
+	transform: translateY(-50%)
+	background: rgba(0, 0, 0, 0.8)
+	border-radius: 8px
+	padding: 10px
+	width: 300px
+	max-height: 400px
+	overflow-y: auto
+	z-index: 1000
+
+	.selected-hashes-title
+		color: #fff
+		font-size: 14px
+		margin-bottom: 10px
+		padding-bottom: 5px
+		border-bottom: 1px solid rgba(255, 255, 255, 0.2)
+
+	.selected-hashes-content
+		.selected-hash-item
+			padding: 5px 0
+			border-bottom: 1px solid rgba(255, 255, 255, 0.1)
+
+			&:last-child
+				border-bottom: none
+
+			.selected-hash-text
+				color: #fff
+				font-size: 12px
+				word-break: break-all
+				font-family: monospace
+
+.table-section
+	margin-bottom: 2rem
+
+	.table-section-header
+		color: #4a88f5
+		font-size: 1.5rem
+		margin-bottom: 1rem
+		padding-bottom: 0.5rem
+		border-bottom: 1px solid rgba(255, 255, 255, 0.2)
+
+.table-section-table
+	width: 100%
+	border-collapse: collapse
+	
+	th
+		text-align: left
+		padding: 8px 12px
+		color: #a7c7ff
+		font-weight: 500
+		border-bottom: 1px solid rgba(255, 255, 255, 0.3)
+		
+	td
+		padding: 12px
+		border-bottom: 1px solid rgba(255, 255, 255, 0.1)
+		
+	tr:hover
+		background: rgba(74, 136, 245, 0.1)
+		
+	.text-right
+		text-align: right
+
+	details
+		cursor: pointer
+		
+		summary
+			outline: none
+			color: #4a88f5
+			font-weight: 500
+			transition: all 0.2s ease
+			&:hover
+				color: #a7c7ff
+				text-decoration: underline
+
+	.rep-list
+		position: absolute
+		background: rgba(20, 20, 30, 0.95)
+		border: 1px solid rgba(74, 136, 245, 0.5)
+		border-radius: 6px
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4)
+		padding: 12px
+		margin-top: 10px
+		width: 350px
+		max-height: 400px
+		overflow-y: auto
+		z-index: 1000
+		right: 10px
+		text-align: left
+
+	.rep-item
+		padding: 8px 0
+		border-bottom: 1px solid rgba(255, 255, 255, 0.1)
+		font-family: monospace
+		font-size: 13px
+		&:last-child
+			border-bottom: none
+
+	.remove-btn
+		background: rgba(255, 50, 50, 0.3)
+		color: white
+		border: none
+		border-radius: 50%
+		width: 28px
+		height: 28px
+		font-size: 18px
+		cursor: pointer
+		display: flex
+		align-items: center
+		justify-content: center
+		transition: all 0.2s ease
+		&:hover
+			background: rgba(255, 50, 50, 0.8)
+			transform: scale(1.1)
+
+// Better styling for hash links
+a
+	color: #4a88f5
+	text-decoration: none
+	transition: all 0.2s ease
+	
+	&:hover
+		color: #a7c7ff
+		text-decoration: underline
+
+// Tooltip styling
+#hash-tooltip
+	background: rgba(20, 20, 30, 0.95) !important
+	color: white !important
+	padding: 10px 14px !important
+	border-radius: 6px !important
+	font-size: 14px !important
+	font-family: monospace !important
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important
+	border: 1px solid rgba(74, 136, 245, 0.5) !important
+	max-width: 500px !important
+	word-break: break-all !important

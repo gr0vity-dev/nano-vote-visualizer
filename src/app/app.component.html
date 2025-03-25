@@ -45,6 +45,38 @@
 	</div>
 
 	<div class="table-section">
+		<h2 class="table-section-header">Selected Elections</h2>
+		<div class="table-section-list">
+			<table class="table-section-table" *ngIf="selectedHashes.length">
+				<th>Hash</th>
+				<th class="text-right">Quorum</th>
+				<th class="text-right">Voting Representatives</th>
+				<th></th>
+				<tr *ngFor="let hash of selectedHashes">
+					<td>
+						<a [href]="explorerUrl + '/block/' + hash" target="_blank">{{ hash }}</a>
+					</td>
+					<td class="text-right">
+						{{ getElectionQuorum(hash) | percent:'1.2-2' }}
+					</td>
+					<td class="text-right">
+						<details>
+							<summary>{{ getElectionReps(hash).length }} Representatives</summary>
+							<div class="rep-list" *ngIf="getElectionReps(hash).length > 0">
+								<div *ngFor="let rep of getElectionReps(hash)" class="rep-item">{{ rep }}</div>
+							</div>
+							<div *ngIf="getElectionReps(hash).length === 0" class="rep-item">No votes yet</div>
+						</details>
+					</td>
+					<td class="text-right">
+						<button class="remove-btn" (click)="removeSelectedHash(hash)">×</button>
+					</td>
+				</tr>
+			</table>
+		</div>
+	</div>
+
+	<div class="table-section">
 		<h2 class="table-section-header">Principal vote participation</h2>
 		<span class="node-disclaimer">
 			Disclaimer: Node marked with *** is biased because it is the source of this information. This might cause the actual vote participation to be higher, even though it is a powerful server.

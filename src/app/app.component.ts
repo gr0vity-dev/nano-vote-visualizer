@@ -41,6 +41,8 @@ export class AppComponent implements OnInit, OnDestroy {
 	readonly maxTrackedElections = 65536; // 2^16 - Memory limit for tracked elections
 	readonly spatialIndex = new Map<string, ElectionChartData[]>();
 	readonly spatialCellSize = 5; // Size of each spatial cell in time units
+	readonly selectedHashes: string[] = []; // Track selected hashes
+	readonly selectedHashesVotes = new Map<string, Set<string>>(); // Track votes per hash
 
 	// User defined settings
 	fps: number;
@@ -117,6 +119,26 @@ export class AppComponent implements OnInit, OnDestroy {
 		return (new Date().getTime() / 1000) - this.startTime;
 	}
 
+	getElectionQuorum(hash: string): number {
+		const index = this.blockToIndex.get(hash);
+		if (index !== undefined) {
+			const item = this.data[index];
+			if (item) {
+				return item.quorum / 100;
+			}
+		}
+		return 0;
+	}
+
+	getElectionReps(hash: string): string[] {
+		const votes = this.selectedHashesVotes.get(hash);
+		if (!votes) return [];
+		return Array.from(votes).map(rep => {
+			const stat = this.representativeStats.get(rep);
+			return stat ? stat.alias : rep;
+		});
+	}
+
 	async start() {
 		const subjects = await this.ws.subscribe();
 		this.wsHealthCheckInterval = setInterval(() => this.ws.checkAndReconnectSocket(), 2000);
@@ -143,6 +165,15 @@ export class AppComponent implements OnInit, OnDestroy {
 			const blocks = this.repToBlocks.get(vote.message.account);
 
 			for (const block of vote.message.blocks) {
+				// Track votes for selected hashes
+				if (this.selectedHashes.includes(block)) {
+					if (!this.selectedHashesVotes.has(block)) {
+						this.selectedHashesVotes.set(block, new Set());
+					}
+					this.selectedHashesVotes.get(block).add(vote.message.account);
+					this.changeDetectorRef.markForCheck();
+				}
+
 				const index = this.blockToIndex.get(block);
 				const item = this.data[index];
 
@@ -183,6 +214,14 @@ export class AppComponent implements OnInit, OnDestroy {
 
 					this.representativeStats.get(vote.message.account).voteCount++;
 				}
+
+				// Remove from selected hashes if confirmed
+				if (item?.quorum >= 100 && this.selectedHashes.includes(block)) {
+					const idx = this.selectedHashes.indexOf(block);
+					this.selectedHashes.splice(idx, 1);
+					this.selectedHashesVotes.delete(block);
+					this.changeDetectorRef.markForCheck();
+				}
 			}
 		});
 
@@ -191,13 +230,14 @@ export class AppComponent implements OnInit, OnDestroy {
 			const index = this.blockToIndex.get(block);
 			const item = this.data[index];
 			if (index !== undefined && item) {
+				// Mark as having a started election as soon as we receive confirmation
+				item.electionStarted = true;
+				
 				if (this.smooth && !isNaN(item.quorum)) {
 					this.indexToAnimating.set(index, 100 - item.quorum);
 				} else {
 					item.quorum = 100;
 				}
-				// Mark as having a started election
-				item.electionStarted = true;
 			} else {
 				this.addNewBlock(block, 100, true, 'normal');
 			}
@@ -300,7 +340,20 @@ export class AppComponent implements OnInit, OnDestroy {
 
 		const fillColor = (<any>fc)
 				.webglFillColor()
-				.value((item: ElectionChartData) => webglColor(yearColorScale(item?.quorum)))
+				.value((item: ElectionChartData) => {
+					if (!item || item.quorum === null) return [0, 0, 0, 0];
+					const color = webglColor(yearColorScale(item.quorum));
+					if (item.electionStarted) {
+						// Make started elections much brighter
+						return [
+							Math.min(1, color[0] * 2.5), // Even brighter
+							Math.min(1, color[1] * 2.5),
+							Math.min(1, color[2] * 2.5),
+							color[3]
+						];
+					}
+					return color;
+				})
 				.data(this.data);
 
 		this.electionChart = document.querySelector('d3fc-canvas');
@@ -310,7 +363,7 @@ export class AppComponent implements OnInit, OnDestroy {
 				.seriesWebglPoint()
 				.xScale(xScale)
 				.yScale(yScale)
-				.size((d: ElectionChartData) => d.electionStarted ? 12 : 8) // Larger for started elections
+				.size((d: ElectionChartData) => d.electionStarted ? 20 : 8) // Even more dramatic size difference
 				.crossValue((item: ElectionChartData) => item?.added)
 				.mainValue((item: ElectionChartData) => item?.quorum)
 				.defined(() => true)
@@ -449,6 +502,52 @@ export class AppComponent implements OnInit, OnDestroy {
 					const tooltip = document.getElementById('hash-tooltip');
 					if (tooltip) {
 						tooltip.style.display = 'none';
+					}
+				})
+				.on('click', (event) => {
+					const [x, y] = d3.pointer(event);
+					const xValue = xScale.invert(x);
+					const yValue = yScale.invert(y);
+					
+					// Use spatial index to limit search
+					const cellKey = Math.floor(xValue / this.spatialCellSize).toString();
+					const nearbyItems = this.spatialIndex.get(cellKey) || [];
+					
+					// Find the closest point in the limited set
+					let closest = null;
+					let minDistance = Infinity;
+					
+					for (const item of nearbyItems) {
+						if (!item || item.quorum === null) continue;
+						
+						const dx = Math.abs(item.added - xValue);
+						const dy = Math.abs(item.quorum - yValue);
+						const distance = Math.sqrt(dx * dx + dy * dy);
+						
+						if (distance < minDistance && distance < 0.5) { // Increased threshold for easier clicking
+							minDistance = distance;
+							closest = item;
+						}
+					}
+					
+					// Add hash to selected hashes if found
+					if (closest && closest.hash) {
+						const existingIndex = this.selectedHashes.indexOf(closest.hash);
+						if (existingIndex !== -1) {
+							// If already selected, remove it
+							this.selectedHashes.splice(existingIndex, 1);
+							this.selectedHashesVotes.delete(closest.hash);
+						} else {
+							// Add new hash
+							this.selectedHashes.unshift(closest.hash);
+							if (this.selectedHashes.length > 20) {
+								const removed = this.selectedHashes.pop();
+								this.selectedHashesVotes.delete(removed);
+							}
+							// Collect existing votes for this hash
+							this.collectExistingVotes(closest.hash);
+						}
+						this.changeDetectorRef.detectChanges(); // Force change detection
 					}
 				});
 	}
@@ -605,6 +704,29 @@ export class AppComponent implements OnInit, OnDestroy {
 		}
 		
 		console.log(`Memory limit reached: removed ${removeCount} oldest blocks`);
+	}
+
+	removeSelectedHash(hash: string) {
+		const index = this.selectedHashes.indexOf(hash);
+		if (index !== -1) {
+			this.selectedHashes.splice(index, 1);
+			this.selectedHashesVotes.delete(hash);
+			this.changeDetectorRef.detectChanges();
+		}
+	}
+
+	// Method to collect all current votes for a hash
+	collectExistingVotes(hash: string) {
+		const votes = new Set<string>();
+		
+		// Check all representatives for votes on this hash
+		for (const [rep, blocks] of this.repToBlocks.entries()) {
+			if (blocks.has(hash)) {
+				votes.add(rep);
+			}
+		}
+		
+		this.selectedHashesVotes.set(hash, votes);
 	}
 
 }
